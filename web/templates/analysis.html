@@ -1,0 +1,310 @@
+{% extends "base.html" %}
+{% block title %}Анализ {{ symbol }} — AI Trading{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Анализ символа</h1>
+</div>
+
+<!-- Форма поиска -->
+<div class="section">
+  <div class="filter-row">
+    <div class="filter-group">
+      <label>Символ</label>
+      <input type="text" id="a-symbol" class="input-field" placeholder="BTC/USDT"
+             value="{{ symbol }}" style="width:140px"/>
+    </div>
+    <div class="filter-group">
+      <label>Рынок</label>
+      <select id="a-market" class="input-select">
+        <option value="spot" {% if market_type == 'spot' %}selected{% endif %}>Spot</option>
+        <option value="futures" {% if market_type == 'futures' %}selected{% endif %}>Futures</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <label>Глубина стакана</label>
+      <select id="a-depth" class="input-select">
+        <option value="10">10</option>
+        <option value="20" selected>20</option>
+        <option value="50">50</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <label>Таймфрейм TA</label>
+      <select id="a-tf" class="input-select">
+        <option value="1m">1m</option>
+        <option value="5m" selected>5m</option>
+        <option value="15m">15m</option>
+        <option value="1h">1h</option>
+        <option value="4h">4h</option>
+      </select>
+    </div>
+    <button class="btn btn-primary" onclick="runAnalysis().then(()=>runTA())">🔍 Анализировать</button>
+  </div>
+</div>
+
+<div id="analysis-status" class="status-msg hidden"></div>
+
+<!-- Результаты -->
+<div id="analysis-results" class="hidden">
+
+  <div class="two-col">
+
+    <!-- Тикер -->
+    <div class="section">
+      <div class="section-title" id="ticker-title">Тикер</div>
+      <table class="info-table" id="ticker-table"></table>
+    </div>
+
+    <!-- Стакан -->
+    <div class="section">
+      <div class="section-title">Анализ стакана</div>
+      <table class="info-table" id="ob-table"></table>
+    </div>
+
+  </div>
+
+  <!-- Уровни -->
+  <div class="section" id="levels-section">
+    <div class="section-title">Ключевые уровни (стакан)</div>
+    <table class="data-table" id="levels-table">
+      <thead>
+        <tr><th>Тип</th><th>Цена</th><th>Объём</th><th>Доля</th></tr>
+      </thead>
+      <tbody id="levels-body"></tbody>
+    </table>
+  </div>
+
+  <!-- Вердикт ликвидности -->
+  <div class="section">
+    <div class="section-title">Вердикт ликвидности</div>
+    <div id="liquidity-verdict" class="verdict-box"></div>
+  </div>
+
+</div>
+
+<!-- TA Блок -->
+<div id="ta-section" class="hidden">
+  <div class="two-col">
+
+    <!-- Сигнал -->
+    <div class="section">
+      <div class="section-title">Торговый сигнал (<span id="ta-tf"></span>)</div>
+      <div id="signal-box" class="signal-box"></div>
+      <div id="signal-reasons" style="margin-top:0.75rem"></div>
+    </div>
+
+    <!-- Риск-расчёт -->
+    <div class="section">
+      <div class="section-title">Расчёт входа</div>
+      <table class="info-table" id="risk-table"></table>
+      <div id="risk-warning" class="risk-warn hidden"></div>
+    </div>
+
+  </div>
+
+  <!-- Индикаторы -->
+  <div class="section">
+    <div class="section-title">Индикаторы</div>
+    <div class="indicators-grid" id="indicators-grid"></div>
+  </div>
+
+  <!-- Паттерны -->
+  <div class="section" id="patterns-section">
+    <div class="section-title">Свечные паттерны</div>
+    <div id="patterns-list"></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function runAnalysis() {
+  const sym    = document.getElementById('a-symbol').value.trim().toUpperCase();
+  const market = document.getElementById('a-market').value;
+  const depth  = document.getElementById('a-depth').value;
+  const status = document.getElementById('analysis-status');
+  const results = document.getElementById('analysis-results');
+
+  status.className = 'status-msg loading-msg';
+  status.textContent = `⏳ Загружаю данные ${sym}...`;
+  results.classList.add('hidden');
+
+  try {
+    const [tickerRes, obRes] = await Promise.all([
+      fetch(`/api/market/ticker?symbol=${encodeURIComponent(sym)}&market=${market}`),
+      fetch(`/api/market/orderbook?symbol=${encodeURIComponent(sym)}&market=${market}&depth=${depth}`),
+    ]);
+
+    const ticker = tickerRes.ok ? await tickerRes.json() : null;
+    const ob     = obRes.ok     ? await obRes.json()     : null;
+
+    if (!ticker && !ob) throw new Error('Символ не найден');
+
+    status.className = 'status-msg success-msg';
+    status.textContent = `✓ Данные загружены для ${sym}`;
+
+    // Тикер
+    if (ticker) {
+      document.getElementById('ticker-title').textContent = `${sym} · ${market.toUpperCase()}`;
+      const chg = ticker.change_24h_pct ?? 0;
+      const chgClass = chg >= 0 ? 'val-green' : 'val-red';
+      document.getElementById('ticker-table').innerHTML = `
+        <tr><td>Последняя цена</td><td class="val-white">${fmtPrice(ticker.last)}</td></tr>
+        <tr><td>Bid / Ask</td><td>${fmtPrice(ticker.bid)} / ${fmtPrice(ticker.ask)}</td></tr>
+        <tr><td>Изм. 24ч</td><td class="${chgClass}">${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%</td></tr>
+        <tr><td>Max 24ч</td><td>${fmtPrice(ticker.high_24h ?? 0)}</td></tr>
+        <tr><td>Min 24ч</td><td>${fmtPrice(ticker.low_24h ?? 0)}</td></tr>
+        <tr><td>Объём 24ч</td><td>${fmtVol(ticker.quote_vol_24h)}</td></tr>`;
+    }
+
+    // Стакан
+    if (ob) {
+      const liqClass = ob.is_liquid ? 'val-green' : 'val-red';
+      const liqStr   = ob.is_liquid ? '✓ Ликвидно' : '✗ Неликвидно';
+      const pMap = { buy: 'val-green', sell: 'val-red', neutral: 'val-yellow' };
+      const pClass = pMap[ob.pressure] || '';
+      document.getElementById('ob-table').innerHTML = `
+        <tr><td>Статус</td><td class="${liqClass}">${liqStr}</td></tr>
+        <tr><td>Спред</td><td class="val-white">${ob.spread_pct}%</td></tr>
+        <tr><td>Best Bid</td><td class="val-green">${fmtPrice(ob.best_bid)}</td></tr>
+        <tr><td>Best Ask</td><td class="val-red">${fmtPrice(ob.best_ask)}</td></tr>
+        <tr><td>Давление</td><td class="${pClass}">${ob.pressure.toUpperCase()} (${ob.pressure_ratio})</td></tr>
+        <tr><td>Объём BID</td><td>${ob.bid_volume.toFixed(2)}</td></tr>
+        <tr><td>Объём ASK</td><td>${ob.ask_volume.toFixed(2)}</td></tr>`;
+
+      // Уровни
+      const lvlBody = document.getElementById('levels-body');
+      lvlBody.innerHTML = '';
+      ob.resistance_levels.forEach(l => {
+        lvlBody.innerHTML += `<tr>
+          <td class="val-red">Сопротивление</td>
+          <td class="val-white">${l.price}</td>
+          <td>${l.size}</td>
+          <td class="val-dim">${l.volume_pct}%</td>
+        </tr>`;
+      });
+      ob.support_levels.forEach(l => {
+        lvlBody.innerHTML += `<tr>
+          <td class="val-green">Поддержка</td>
+          <td class="val-white">${l.price}</td>
+          <td>${l.size}</td>
+          <td class="val-dim">${l.volume_pct}%</td>
+        </tr>`;
+      });
+
+      // Вердикт
+      const vBox = document.getElementById('liquidity-verdict');
+      vBox.textContent = ob.verdict;
+      vBox.className = 'verdict-box ' + (ob.is_liquid ? 'verdict-ok' : 'verdict-warn');
+    }
+
+    results.classList.remove('hidden');
+  } catch(e) {
+    status.className = 'status-msg error-msg';
+    status.textContent = `✗ Ошибка: ${e.message}`;
+  }
+}
+
+async function runTA() {
+  const sym = document.getElementById('a-symbol').value.trim().toUpperCase();
+  const mkt = document.getElementById('a-market').value;
+  const tf  = document.getElementById('a-tf') ? document.getElementById('a-tf').value : '5m';
+  const sec = document.getElementById('ta-section');
+  sec.classList.add('hidden');
+
+  try {
+    const r = await fetch(`/api/market/ta?symbol=${encodeURIComponent(sym)}&market=${mkt}&timeframe=${tf}`);
+    if (!r.ok) return;
+    const { signal, risk } = await r.json();
+
+    // Сигнал
+    document.getElementById('ta-tf').textContent = tf;
+    const sBox = document.getElementById('signal-box');
+    const dirMap = { long: ['val-green', '▲ LONG'], short: ['val-red', '▼ SHORT'], neutral: ['val-dim', '◆ НЕЙТРАЛЬНО'] };
+    const confMap = { high: 'Высокая', medium: 'Средняя', low: 'Низкая' };
+    const [cls, lbl] = dirMap[signal.direction] || ['val-dim', '—'];
+    sBox.innerHTML = `
+      <div style="font-size:1.4rem;font-weight:700" class="${cls}">${lbl}</div>
+      <div style="font-size:0.8rem;color:var(--text-dim);margin-top:0.3rem">
+        Скор: <b>${signal.score > 0 ? '+' : ''}${signal.score}</b> &nbsp;|&nbsp;
+        Уверенность: <b>${confMap[signal.confidence] || signal.confidence}</b>
+      </div>`;
+
+    const rList = document.getElementById('signal-reasons');
+    if (signal.reasons && signal.reasons.length) {
+      rList.innerHTML = signal.reasons.map(r =>
+        `<div class="reason-item">• ${r}</div>`
+      ).join('');
+    } else {
+      rList.innerHTML = '<span class="val-dim">Недостаточно данных</span>';
+    }
+
+    // Риск
+    const rTable = document.getElementById('risk-table');
+    if (risk.is_valid) {
+      const dir = risk.direction === 'long' ? '▲ LONG' : '▼ SHORT';
+      rTable.innerHTML = `
+        <tr><td>Направление</td><td class="${risk.direction==='long'?'val-green':'val-red'}">${dir}</td></tr>
+        <tr><td>Вход</td><td class="val-white">${fmtPrice(risk.entry_price)}</td></tr>
+        <tr><td>SL</td><td class="val-red">${fmtPrice(risk.sl_price)} (−${risk.sl_pct}%)</td></tr>
+        <tr><td>TP1</td><td class="val-green">${fmtPrice(risk.tp1_price)} (+${risk.tp1_pct}%)</td></tr>
+        <tr><td>TP2</td><td class="val-green">${fmtPrice(risk.tp2_price)}</td></tr>
+        <tr><td>TP3</td><td class="val-green">${fmtPrice(risk.tp3_price)}</td></tr>
+        <tr><td>Размер входа</td><td>${risk.entry_size}$</td></tr>
+        <tr><td>Макс. убыток</td><td class="val-red">−${risk.max_loss}$</td></tr>
+        <tr><td>R:R</td><td class="val-green">${risk.rr_ratio}:1</td></tr>`;
+    } else {
+      rTable.innerHTML = `<tr><td colspan="2" class="val-red">${risk.warning}</td></tr>`;
+    }
+
+    const rWarn = document.getElementById('risk-warning');
+    if (risk.warning) { rWarn.textContent = '⚠ ' + risk.warning; rWarn.classList.remove('hidden'); }
+    else rWarn.classList.add('hidden');
+
+    // Индикаторы
+    const ind = signal.indicators || {};
+    const indGrid = document.getElementById('indicators-grid');
+    const indItems = [
+      ['RSI', ind.rsi?.toFixed(1), ind.rsi < 30 ? 'val-green' : ind.rsi > 70 ? 'val-red' : ''],
+      ['EMA 9',  fmtPrice(ind.ema_9),  ''],
+      ['EMA 21', fmtPrice(ind.ema_21), ''],
+      ['EMA 50', fmtPrice(ind.ema_50), ''],
+      ['MACD',   ind.macd?.toFixed(6), ind.macd > 0 ? 'val-green' : 'val-red'],
+      ['MACD Hist', ind.macd_hist?.toFixed(6), ind.macd_hist > 0 ? 'val-green' : 'val-red'],
+      ['BB %B',  ind.bb_pct?.toFixed(2), ind.bb_pct < 0.2 ? 'val-green' : ind.bb_pct > 0.8 ? 'val-red' : ''],
+      ['Stoch K', ind.stoch_k?.toFixed(1), ind.stoch_k < 20 ? 'val-green' : ind.stoch_k > 80 ? 'val-red' : ''],
+      ['ATR',    fmtPrice(ind.atr),   ''],
+      ['ATR %',  ind.atr_pct?.toFixed(2) + '%', ''],
+      ['VWAP',   fmtPrice(ind.vwap),  ''],
+      ['Vol ×',  ind.vol_ratio?.toFixed(2) + '×', ind.vol_ratio > 1.5 ? 'val-yellow' : ''],
+      ['Тренд',  ind.ema_trend,       ind.ema_trend === 'uptrend' ? 'val-green' : ind.ema_trend === 'downtrend' ? 'val-red' : ''],
+      ['MACD ×', ind.macd_cross,      ind.macd_cross === 'bullish' ? 'val-green' : ind.macd_cross === 'bearish' ? 'val-red' : ''],
+    ];
+    indGrid.innerHTML = indItems.filter(([,v]) => v != null && v !== 'null' && v !== 'undefined').map(([label, val, cls]) =>
+      `<div class="ind-item"><span class="ind-label">${label}</span><span class="ind-val ${cls||''}">${val ?? '—'}</span></div>`
+    ).join('');
+
+    // Паттерны
+    const patList = document.getElementById('patterns-list');
+    if (signal.patterns && signal.patterns.length) {
+      patList.innerHTML = signal.patterns.map(p => {
+        const cls = p.direction === 'bullish' ? 'pat-bull' : p.direction === 'bearish' ? 'pat-bear' : 'pat-neu';
+        const str = { strong: '⬛⬛⬛', medium: '⬛⬛', weak: '⬛' }[p.strength] || '';
+        return `<span class="pat-badge ${cls}">${p.pattern} ${str}</span>`;
+      }).join('');
+    } else {
+      patList.innerHTML = '<span class="val-dim">Паттерны не обнаружены</span>';
+    }
+
+    sec.classList.remove('hidden');
+  } catch(e) { console.error('TA error', e); }
+}
+
+// Авто-запуск если символ передан из URL
+window.addEventListener('DOMContentLoaded', () => {
+  const sym = document.getElementById('a-symbol').value;
+  if (sym) runAnalysis().then(() => runTA());
+});
+</script>
+{% endblock %}

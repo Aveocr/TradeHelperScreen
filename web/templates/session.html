@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}Пре-сессионный чек — AI Trading{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Пре-сессионный чек</h1>
+  <span class="page-sub">Оценка состояния перед торговой сессией</span>
+</div>
+
+{% if not result %}
+<!-- Форма -->
+<div class="section" style="max-width:560px">
+  <form method="post" action="/session/">
+    <div class="form-group">
+      <label class="form-label">
+        Как ты оцениваешь своё эмоциональное состояние?
+      </label>
+      <div class="score-grid">
+        {% for i in range(1, 11) %}
+        <label class="score-btn">
+          <input type="radio" name="score" value="{{ i }}" required
+                 {% if i == 7 %}checked{% endif %}>
+          <span>{{ i }}</span>
+        </label>
+        {% endfor %}
+      </div>
+      <div class="score-hints">
+        <span>😞 Плохо</span>
+        <span>😐 Нейтрально</span>
+        <span>😊 Отлично</span>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Заметки (необязательно)</label>
+      <textarea name="notes" class="input-textarea"
+                placeholder="Что-то на уме? Недосып, стресс, новости..."></textarea>
+    </div>
+
+    <button type="submit" class="btn btn-primary btn-lg">Получить оценку</button>
+  </form>
+</div>
+
+{% else %}
+<!-- Результат -->
+<div class="section" style="max-width:560px">
+
+  <div class="score-display score-{{ result.color }}">
+    <div class="score-number">{{ result.score }}<span>/10</span></div>
+    <div class="score-verdict">{{ result.verdict }}</div>
+    <div class="score-status">
+      Торговать: <strong>{% if result.allowed %}✅ ДА{% else %}❌ НЕТ{% endif %}</strong>
+    </div>
+  </div>
+
+  {% if result.notes %}
+  <div class="note-box">
+    <div class="note-label">Твои заметки:</div>
+    <div>{{ result.notes }}</div>
+  </div>
+  {% endif %}
+
+  <div class="tips-box">
+    <div class="tips-title">💡 Рекомендации:</div>
+    <ul class="tips-list">
+      {% for tip in result.tips %}
+      <li>{{ tip }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+
+  <div style="margin-top:1.5rem; display:flex; gap:1rem">
+    <a href="/session" class="btn btn-secondary">← Пройти заново</a>
+    {% if result.allowed %}
+    <a href="/" class="btn btn-primary">Перейти к торговле →</a>
+    {% endif %}
+  </div>
+
+  {% if result.claude_advice %}
+  <div class="section" style="margin-top:1rem">
+    <div class="section-title">🤖 Анализ Claude AI</div>
+    <div class="claude-output">{{ result.claude_advice }}</div>
+  </div>
+  {% else %}
+  <div class="ai-note">
+    🤖 Для персонального анализа Claude настрой ANTHROPIC_API_KEY в .env
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

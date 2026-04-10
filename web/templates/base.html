@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>{% block title %}AI Trading Assistant{% endblock %}</title>
+  <link rel="stylesheet" href="/static/css/style.css"/>
+  {% block head %}{% endblock %}
+</head>
+<body>
+
+<nav class="navbar">
+  <div class="nav-brand">
+    <span class="brand-icon">⬡</span>
+    <span class="brand-name">AI Trading</span>
+    <span class="brand-sub">Gate.io</span>
+  </div>
+  <ul class="nav-links">
+    <li><a href="/" class="{% if request.url.path == '/' %}active{% endif %}">Дашборд</a></li>
+    <li><a href="/screener" class="{% if request.url.path == '/screener' %}active{% endif %}">Скринер</a></li>
+    <li><a href="/analysis" class="{% if request.url.path == '/analysis' %}active{% endif %}">Анализ</a></li>
+    <li><a href="/positions" class="{% if '/positions' in request.url.path %}active{% endif %}">📊 Позиции</a></li>
+    <li><a href="/agent/recommend" class="{% if '/agent' in request.url.path %}active{% endif %}">🤖 Агент</a></li>
+    <li><a href="/session" class="{% if '/session' in request.url.path %}active{% endif %}">Чек сессии</a></li>
+    <li><a href="/settings" class="{% if '/settings' in request.url.path %}active{% endif %}">⚙️ Риски</a></li>
+  </ul>
+  <div class="nav-status">
+    <span class="status-dot" id="conn-dot"></span>
+    <span id="conn-label">Подключение...</span>
+  </div>
+</nav>
+
+<main class="main-content">
+  {% block content %}{% endblock %}
+</main>
+
+<script src="/static/js/main.js"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

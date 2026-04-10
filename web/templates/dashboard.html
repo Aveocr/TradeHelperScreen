@@ -1,0 +1,232 @@
+{% extends "base.html" %}
+{% block title %}Дашборд — AI Trading{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Дашборд</h1>
+  <span class="page-date" id="live-time"></span>
+</div>
+
+{% if blocked %}
+<div class="alert alert-danger">
+  🔒 Торговая сессия заблокирована — дневной лимит просадки достигнут (−{{ limit }}$)
+</div>
+{% endif %}
+
+<!-- Верхние карточки -->
+<div class="cards-row">
+
+  <div class="card {% if pnl >= 0 %}card-green{% else %}card-red{% endif %}">
+    <div class="card-label">P&L сегодня</div>
+    <div class="card-value">{{ pnl_sign }}{{ "%.2f"|format(pnl) }}$</div>
+    <div class="card-sub">Лимит: −{{ "%.2f"|format(limit) }}$</div>
+  </div>
+
+  <div class="card {% if remaining > 2 %}card-green{% elif remaining > 0 %}card-yellow{% else %}card-red{% endif %}">
+    <div class="card-label">Осталось</div>
+    <div class="card-value">{{ "%.2f"|format(remaining) }}$</div>
+    <div class="card-sub">до лимита просадки</div>
+  </div>
+
+  <div class="card">
+    <div class="card-label">Сделок</div>
+    <div class="card-value">{{ stats.trades_count }}</div>
+    <div class="card-sub">убыточных: {{ stats.losses_count }}</div>
+  </div>
+
+  <div class="card {% if not blocked %}card-green{% else %}card-red{% endif %}">
+    <div class="card-label">Статус сессии</div>
+    <div class="card-value" style="font-size:1.1rem">
+      {% if blocked %}🔒 Заблокирована{% else %}✅ Активна{% endif %}
+    </div>
+    <div class="card-sub">{{ stats.trade_date }}</div>
+  </div>
+
+</div>
+
+<!-- Прогресс-бар просадки -->
+<div class="section">
+  <div class="section-title">Дневная просадка</div>
+  <div class="progress-wrap">
+    <div class="progress-bar" id="dd-bar" style="width: {{ used_pct }}%;"
+         data-pct="{{ used_pct }}"></div>
+  </div>
+  <div class="progress-labels">
+    <span>0$</span>
+    <span id="dd-label">{{ used_pct }}% использовано</span>
+    <span>−{{ "%.0f"|format(limit) }}$</span>
+  </div>
+</div>
+
+<!-- Два блока рядом -->
+<div class="two-col">
+
+  <!-- Правила входа -->
+  <div class="section">
+    <div class="section-title">Правила входа</div>
+    <table class="info-table">
+      <tr><td>Размер входа</td><td class="val-white">{{ "%.0f"|format(entry_size) }}$</td></tr>
+      <tr><td>Макс. убыток (SL)</td><td class="val-red">−{{ "%.0f"|format(max_loss) }}$ (10%)</td></tr>
+      <tr><td>Мин. R:R</td><td class="val-green">{{ "%.0f"|format(rr_ratio) }}:1</td></tr>
+      <tr><td>TP1</td><td class="val-green">+{{ "%.0f"|format(tp1) }}$</td></tr>
+      <tr><td>TP2</td><td class="val-green">+{{ "%.0f"|format(tp2) }}$</td></tr>
+      <tr><td>TP3</td><td class="val-green">+{{ "%.0f"|format(tp3) }}$</td></tr>
+      <tr><td>Макс. стоп-лоссов</td><td class="val-white">{{ max_trades }}</td></tr>
+    </table>
+  </div>
+
+  <!-- Быстрые действия -->
+  <div class="section">
+    <div class="section-title">Быстрые действия</div>
+    <div class="quick-actions">
+      <a href="/screener" class="btn btn-primary {% if blocked %}btn-disabled{% endif %}">
+        📊 Скринер рынка
+      </a>
+      <a href="/analysis" class="btn btn-primary {% if blocked %}btn-disabled{% endif %}">
+        🔍 Анализ символа
+      </a>
+      <a href="/agent/recommend" class="btn btn-secondary {% if blocked %}btn-disabled{% endif %}">
+        🤖 Рекомендация агента
+      </a>
+      <a href="/session" class="btn btn-secondary">
+        🧠 Пре-сессионный чек
+      </a>
+    </div>
+
+    <div class="section-title" style="margin-top:1.5rem">Записать результат сделки</div>
+    <div class="trade-record-wrap">
+      <div class="trade-quick-btns">
+        <button class="btn btn-xs btn-green" onclick="recordQuick({{ tp1 }})">+TP1 +{{ "%.2f"|format(tp1) }}$</button>
+        <button class="btn btn-xs btn-green" onclick="recordQuick({{ tp2 }})">+TP2 +{{ "%.2f"|format(tp2) }}$</button>
+        <button class="btn btn-xs btn-green" onclick="recordQuick({{ tp3 }})">+TP3 +{{ "%.2f"|format(tp3) }}$</button>
+        <button class="btn btn-xs btn-red"   onclick="recordQuick(-{{ max_loss }})">−SL −{{ "%.2f"|format(max_loss) }}$</button>
+      </div>
+      <div class="trade-custom-row">
+        <input type="number" id="pnl-input" class="input-field" step="0.01" placeholder="Своя сумма ($)" style="flex:1"/>
+        <button class="btn btn-secondary btn-sm" onclick="recordCustom()">Записать</button>
+      </div>
+      <div id="trade-msg" class="trade-msg hidden"></div>
+    </div>
+
+    <div class="section-title" style="margin-top:1.5rem">Быстрый тикер</div>
+    <div class="quick-ticker">
+      <input type="text" id="ticker-input" class="input-field" placeholder="BTC/USDT" value="BTC/USDT"/>
+      <select id="ticker-market" class="input-select">
+        <option value="spot">Spot</option>
+        <option value="futures">Futures</option>
+      </select>
+      <button class="btn btn-primary" onclick="fetchTicker()">Получить</button>
+    </div>
+    <div id="ticker-result" class="ticker-result hidden"></div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Живые часы
+function updateTime() {
+  const el = document.getElementById('live-time');
+  if (el) el.textContent = new Date().toLocaleString('ru-RU');
+}
+setInterval(updateTime, 1000);
+updateTime();
+
+// Цвет прогресс-бара
+const bar = document.getElementById('dd-bar');
+if (bar) {
+  const pct = parseFloat(bar.dataset.pct);
+  if (pct > 70) bar.classList.add('bar-red');
+  else if (pct > 40) bar.classList.add('bar-yellow');
+  else bar.classList.add('bar-green');
+}
+
+// ── Запись результата сделки ──────────────────────────────────────────────────
+async function recordQuick(pnl) { await recordPnl(pnl); }
+
+async function recordCustom() {
+  const val = parseFloat(document.getElementById('pnl-input').value);
+  if (isNaN(val)) { showTradeMsg('Введите сумму', 'err'); return; }
+  await recordPnl(val);
+}
+
+async function recordPnl(pnl) {
+  const msg = document.getElementById('trade-msg');
+  try {
+    const r = await fetch('/api/market/pnl', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({pnl}),
+    });
+    if (!r.ok) { const e = await r.json(); throw new Error(e.detail); }
+    const d = await r.json();
+
+    // Обновляем карточки без перезагрузки
+    updateDashboardCards(d);
+
+    const sign = pnl >= 0 ? '+' : '';
+    showTradeMsg(`✓ Записано: ${sign}${pnl.toFixed(2)}$ | Дневной P&L: ${d.realized_pnl >= 0 ? '+' : ''}${d.realized_pnl.toFixed(2)}$`, pnl >= 0 ? 'ok' : 'err');
+    document.getElementById('pnl-input').value = '';
+  } catch(e) {
+    showTradeMsg('Ошибка: ' + e.message, 'err');
+  }
+}
+
+function updateDashboardCards(d) {
+  // P&L карточка
+  const pnlCard = document.querySelector('.cards-row .card:first-child');
+  if (pnlCard) {
+    const pnlVal = pnlCard.querySelector('.card-value');
+    if (pnlVal) pnlVal.textContent = (d.realized_pnl >= 0 ? '+' : '') + d.realized_pnl.toFixed(2) + '$';
+    pnlCard.className = 'card ' + (d.realized_pnl >= 0 ? 'card-green' : 'card-red');
+  }
+  // Осталось
+  const remCard = document.querySelector('.cards-row .card:nth-child(2) .card-value');
+  if (remCard) remCard.textContent = d.remaining.toFixed(2) + '$';
+  // Сделок
+  const trCard = document.querySelector('.cards-row .card:nth-child(3) .card-value');
+  if (trCard) trCard.textContent = d.trades_count;
+  const trSub = document.querySelector('.cards-row .card:nth-child(3) .card-sub');
+  if (trSub) trSub.textContent = 'убыточных: ' + d.losses_count;
+  // Прогресс-бар
+  const bar = document.getElementById('dd-bar');
+  if (bar) {
+    bar.style.width = d.used_pct + '%';
+    bar.className = 'progress-bar ' + (d.used_pct > 70 ? 'bar-red' : d.used_pct > 40 ? 'bar-yellow' : 'bar-green');
+  }
+  const ddLabel = document.getElementById('dd-label');
+  if (ddLabel) ddLabel.textContent = d.used_pct + '% использовано';
+}
+
+function showTradeMsg(text, type) {
+  const el = document.getElementById('trade-msg');
+  el.textContent = text;
+  el.className = 'trade-msg ' + type;
+  setTimeout(() => el.className = 'trade-msg hidden', 5000);
+}
+
+// Быстрый тикер
+async function fetchTicker() {
+  const sym = document.getElementById('ticker-input').value.trim().toUpperCase();
+  const mkt = document.getElementById('ticker-market').value;
+  const res = document.getElementById('ticker-result');
+  res.classList.remove('hidden');
+  res.innerHTML = '<span class="loading">Загрузка...</span>';
+  try {
+    const r = await fetch(`/api/market/ticker?symbol=${encodeURIComponent(sym)}&market=${mkt}`);
+    if (!r.ok) { const e = await r.json(); res.innerHTML = `<span class="err">${e.detail}</span>`; return; }
+    const d = await r.json();
+    const chg = d.change_24h_pct ?? 0;
+    const chgClass = chg >= 0 ? 'val-green' : 'val-red';
+    res.innerHTML = `
+      <div class="ticker-grid">
+        <div><span class="t-label">Цена</span><span class="t-val val-white">${fmtPrice(d.last)}</span></div>
+        <div><span class="t-label">Изм. 24ч</span><span class="t-val ${chgClass}">${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%</span></div>
+        <div><span class="t-label">Объём 24ч</span><span class="t-val">${fmtVol(d.quote_vol_24h)}</span></div>
+        <div><span class="t-label">Bid / Ask</span><span class="t-val">${fmtPrice(d.bid)} / ${fmtPrice(d.ask)}</span></div>
+      </div>`;
+  } catch(e) { res.innerHTML = `<span class="err">Ошибка: ${e.message}</span>`; }
+}
+</script>
+{% endblock %}

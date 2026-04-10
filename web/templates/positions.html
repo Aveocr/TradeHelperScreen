@@ -1,0 +1,447 @@
+{% extends "base.html" %}
+{% block title %}Позиции — AI Trading{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Открытые позиции</h1>
+  <div class="page-header-actions">
+    <div class="market-tabs">
+      <button class="tab-btn active" id="tab-futures" onclick="switchMarket('futures')">Фьючерсы</button>
+      <button class="tab-btn" id="tab-spot" onclick="switchMarket('spot')">Спот</button>
+    </div>
+    <button class="btn btn-xs pnl-toggle" id="pnl-mode-btn" onclick="togglePnlMode()" title="Переключить $ / %">$ / %</button>
+    <button class="btn btn-secondary btn-sm" onclick="loadPositions()">↻ Обновить</button>
+  </div>
+</div>
+
+<div id="pos-status" class="status-msg hidden"></div>
+
+<!-- Balance Bar (spot only) -->
+<div id="balance-bar" class="balance-bar hidden">
+  <span class="balance-label">Баланс USDT:</span>
+  <span class="balance-free" id="balance-free">—</span>
+  <span class="balance-sep">свободно /</span>
+  <span class="balance-total" id="balance-total">—</span>
+  <span class="balance-sep">всего</span>
+</div>
+
+<!-- Positions Grid -->
+<div id="positions-grid" class="positions-grid">
+  <div class="empty-state">⏳ Загрузка позиций...</div>
+</div>
+
+<!-- Open Orders Section -->
+<div class="section" style="margin-top:1.5rem">
+  <div class="section-title" style="display:flex;justify-content:space-between;align-items:center">
+    <span>Открытые ордера</span>
+    <button class="btn btn-xs btn-secondary" onclick="loadOrders()">↻</button>
+  </div>
+  <div id="orders-wrap">
+    <div class="empty-state" style="padding:1rem">Нет активных ордеров</div>
+  </div>
+</div>
+
+<!-- Order Book Mini -->
+<div class="section" style="margin-top:1.5rem" id="ob-section" style="display:none">
+  <div class="section-title">
+    Стакан: <span id="ob-symbol-label">—</span>
+    <span class="ob-refresh-note">(обновляется каждые 5с)</span>
+  </div>
+  <div id="ob-mini-wrap" class="ob-mini-wrap">
+    <div class="ob-mini-col">
+      <div class="ob-mini-header"><span>Цена</span><span>Объём</span></div>
+      <div id="ob-asks" class="ob-asks"></div>
+    </div>
+    <div class="ob-mid-price" id="ob-mid">—</div>
+    <div class="ob-mini-col">
+      <div class="ob-mini-header"><span>Цена</span><span>Объём</span></div>
+      <div id="ob-bids" class="ob-bids"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Модал: Закрыть позицию ─── -->
+<div class="modal-overlay hidden" id="modal-close">
+  <div class="modal">
+    <div class="modal-title">Закрыть позицию по рынку</div>
+    <div class="modal-body">
+      <div class="modal-info" id="close-info"></div>
+      <div class="modal-warn">⚠️ Ордер будет исполнен немедленно по рыночной цене</div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeModal('modal-close')">Отмена</button>
+      <button class="btn btn-red" id="close-confirm-btn" onclick="confirmClose()">Закрыть позицию</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Модал: Лимитный ордер ─── -->
+<div class="modal-overlay hidden" id="modal-order">
+  <div class="modal">
+    <div class="modal-title">Лимитная заявка</div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">Символ</label>
+        <input type="text" id="ord-symbol" class="input-field" readonly/>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Тип рынка</label>
+        <select id="ord-market" class="input-select">
+          <option value="spot">Spot</option>
+          <option value="futures">Futures</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Направление</label>
+        <div class="side-toggle">
+          <button class="side-btn side-buy active" id="ord-side-buy" onclick="setSide('buy')">BUY</button>
+          <button class="side-btn side-sell" id="ord-side-sell" onclick="setSide('sell')">SELL</button>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Цена (USDT)</label>
+        <input type="number" id="ord-price" class="input-field" step="any" placeholder="0.00"/>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Количество (базовая валюта)</label>
+        <input type="number" id="ord-amount" class="input-field" step="any" placeholder="0.001"/>
+      </div>
+      <div id="ord-result" class="ord-result hidden"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeModal('modal-order')">Отмена</button>
+      <button class="btn btn-primary" onclick="submitOrder()">Разместить ордер</button>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+let _market = 'futures';
+let _pnlMode = '$';   // '$' or '%'
+let _pendingClose = null;
+let _obSymbol = null;
+let _obInterval = null;
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', () => {
+  loadPositions();
+  loadOrders();
+  loadBalance();
+});
+
+// ── Market switch ─────────────────────────────────────────────────────────────
+function switchMarket(mkt) {
+  _market = mkt;
+  document.getElementById('tab-futures').classList.toggle('active', mkt === 'futures');
+  document.getElementById('tab-spot').classList.toggle('active', mkt === 'spot');
+  loadPositions();
+  loadOrders();
+  loadBalance();
+}
+
+// ── Balance (spot only) ───────────────────────────────────────────────────────
+async function loadBalance() {
+  const bar = document.getElementById('balance-bar');
+  if (_market !== 'spot') { bar.classList.add('hidden'); return; }
+  try {
+    const r = await fetch(`/positions/api/balance?market_type=spot`);
+    if (!r.ok) return;
+    const d = await r.json();
+    document.getElementById('balance-free').textContent  = fmtVol(d.usdt_free)  + ' USDT';
+    document.getElementById('balance-total').textContent = fmtVol(d.usdt_total) + ' USDT';
+    bar.classList.remove('hidden');
+  } catch(e) {}
+}
+
+// ── P&L toggle ────────────────────────────────────────────────────────────────
+function togglePnlMode() {
+  _pnlMode = _pnlMode === '$' ? '%' : '$';
+  document.getElementById('pnl-mode-btn').textContent = _pnlMode === '$' ? '$ / %' : '% / $';
+  document.querySelectorAll('.pnl-dollar').forEach(el => el.classList.toggle('hidden', _pnlMode !== '$'));
+  document.querySelectorAll('.pnl-pct').forEach(el => el.classList.toggle('hidden', _pnlMode !== '%'));
+}
+
+// ── Load positions ────────────────────────────────────────────────────────────
+async function loadPositions() {
+  const grid = document.getElementById('positions-grid');
+  grid.innerHTML = '<div class="empty-state">⏳ Загрузка...</div>';
+  try {
+    const r = await fetch(`/positions/api/list?market_type=${_market}`);
+    if (!r.ok) { const e = await r.json(); throw new Error(e.detail); }
+    const { positions, count } = await r.json();
+
+    if (!count) {
+      grid.innerHTML = '<div class="empty-state">Нет открытых позиций</div>';
+      return;
+    }
+
+    grid.innerHTML = positions.map(p => renderCard(p)).join('');
+
+    // If we have positions, show orderbook for first one
+    if (positions.length && !_obSymbol) {
+      showOrderBook(positions[0].symbol);
+    }
+  } catch(e) {
+    grid.innerHTML = `<div class="empty-state err">${e.message}</div>`;
+  }
+}
+
+// ── Render position card ──────────────────────────────────────────────────────
+function renderCard(p) {
+  const isLong  = p.side === 'long';
+  const pnlPos  = p.pnl >= 0;
+  const pnlCls  = pnlPos ? 'val-green' : 'val-red';
+  const sideCls = isLong ? 'side-badge-long' : 'side-badge-short';
+  const sideLabel = isLong ? 'LONG' : 'SHORT';
+
+  const pnlDollar = `${p.pnl >= 0 ? '+' : ''}${p.pnl.toFixed(2)}$`;
+  const pnlPercent= `${p.pnl_pct >= 0 ? '+' : ''}${p.pnl_pct.toFixed(2)}%`;
+
+  const entryStr = p.entry_price > 0 ? fmtPrice(p.entry_price) : '—';
+  const liqStr   = p.liq_price  > 0 ? fmtPrice(p.liq_price)   : '—';
+  const notional = fmtVol(p.notional);
+
+  const mktLabel = p.market_type === 'futures' ? 'Futures' : 'Spot';
+  const leverageStr = p.leverage > 1 ? `${p.leverage}x` : '';
+
+  return `
+  <div class="pos-card ${isLong ? 'pos-long' : 'pos-short'}" onclick="showOrderBook('${p.symbol}')">
+    <div class="pos-header">
+      <div class="pos-sym-wrap">
+        <span class="pos-symbol">${p.symbol}</span>
+        <span class="side-badge ${sideCls}">${sideLabel}${leverageStr ? ' ' + leverageStr : ''}</span>
+        <span class="mkt-badge">${mktLabel}</span>
+      </div>
+      <div class="pos-pnl ${pnlCls}">
+        <span class="pnl-dollar ${_pnlMode !== '$' ? 'hidden' : ''}">${pnlDollar}</span>
+        <span class="pnl-pct   ${_pnlMode !== '%' ? 'hidden' : ''}">${pnlPercent}</span>
+      </div>
+    </div>
+    <div class="pos-data">
+      <div class="pos-item"><span class="pos-label">Контрактов</span><span class="pos-val val-white">${p.contracts}</span></div>
+      <div class="pos-item"><span class="pos-label">Стоимость</span><span class="pos-val">${notional}</span></div>
+      <div class="pos-item"><span class="pos-label">Вход</span><span class="pos-val">${entryStr}</span></div>
+      <div class="pos-item"><span class="pos-label">Тек. цена</span><span class="pos-val val-white">${fmtPrice(p.mark_price)}</span></div>
+      ${p.market_type === 'futures' ? `<div class="pos-item"><span class="pos-label">Ликвидация</span><span class="pos-val val-red">${liqStr}</span></div>` : ''}
+      <div class="pos-item"><span class="pos-label">P&L %</span><span class="pos-val ${pnlCls}">${pnlPercent}</span></div>
+    </div>
+    <div class="pos-actions">
+      <button class="btn btn-xs btn-secondary" onclick="event.stopPropagation();openOrderModal('${p.symbol}', '${p.market_type}', ${p.mark_price})">
+        📋 Лимитная заявка
+      </button>
+      <button class="btn btn-xs btn-red" onclick="event.stopPropagation();openCloseModal('${p.symbol}','${p.side}',${p.contracts},'${p.market_type}')">
+        ✕ Закрыть
+      </button>
+    </div>
+  </div>`;
+}
+
+// ── Load orders ───────────────────────────────────────────────────────────────
+async function loadOrders() {
+  const wrap = document.getElementById('orders-wrap');
+  wrap.innerHTML = '<div class="loading-row">Загрузка ордеров...</div>';
+  try {
+    const r = await fetch(`/positions/api/orders?market_type=${_market}`);
+    if (!r.ok) { const e = await r.json(); throw new Error(e.detail); }
+    const { orders } = await r.json();
+
+    if (!orders.length) {
+      wrap.innerHTML = '<div class="empty-state" style="padding:1rem">Нет активных ордеров</div>';
+      return;
+    }
+
+    const rows = orders.map(o => {
+      const sideCls = o.side === 'buy' ? 'val-green' : 'val-red';
+      const ts = o.timestamp ? new Date(o.timestamp).toLocaleTimeString('ru-RU') : '—';
+      return `<tr>
+        <td class="val-dim">${ts}</td>
+        <td><span class="sym-link">${o.symbol}</span></td>
+        <td class="${sideCls}" style="text-transform:uppercase">${o.side}</td>
+        <td class="val-dim">${o.type}</td>
+        <td class="val-white">${o.price ? fmtPrice(o.price) : 'рыночный'}</td>
+        <td>${o.amount ?? '—'}</td>
+        <td class="val-dim">${o.filled ?? 0} / ${o.remaining ?? '—'}</td>
+        <td>
+          <button class="btn btn-xs btn-red" onclick="cancelOrd('${o.id}','${o.symbol}')">Отменить</button>
+        </td>
+      </tr>`;
+    }).join('');
+
+    wrap.innerHTML = `<table class="data-table">
+      <thead><tr><th>Время</th><th>Символ</th><th>Сторона</th><th>Тип</th><th>Цена</th><th>Кол-во</th><th>Исполнено/Ост.</th><th></th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  } catch(e) {
+    wrap.innerHTML = `<div class="empty-state err" style="padding:1rem">${e.message}</div>`;
+  }
+}
+
+// ── Cancel order ──────────────────────────────────────────────────────────────
+async function cancelOrd(id, symbol) {
+  if (!confirm(`Отменить ордер ${id} по ${symbol}?`)) return;
+  try {
+    const r = await fetch('/positions/api/cancel', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({order_id: id, symbol, market_type: _market}),
+    });
+    if (!r.ok) { const e = await r.json(); throw new Error(e.detail); }
+    await loadOrders();
+  } catch(e) {
+    alert('Ошибка: ' + e.message);
+  }
+}
+
+// ── Order book mini ───────────────────────────────────────────────────────────
+function showOrderBook(symbol) {
+  _obSymbol = symbol;
+  document.getElementById('ob-symbol-label').textContent = symbol;
+  document.getElementById('ob-section').style.display = '';
+  fetchOB();
+  if (_obInterval) clearInterval(_obInterval);
+  _obInterval = setInterval(fetchOB, 5000);
+}
+
+async function fetchOB() {
+  if (!_obSymbol) return;
+  try {
+    const r = await fetch(`/api/market/orderbook?symbol=${encodeURIComponent(_obSymbol)}&market=${_market}&depth=10`);
+    if (!r.ok) return;
+    const d = await r.json();
+
+    const asksEl = document.getElementById('ob-asks');
+    const bidsEl = document.getElementById('ob-bids');
+    const midEl  = document.getElementById('ob-mid');
+
+    // Sort asks ascending, show top 8
+    const asks = (d.bids ? d : {asks: [], bids: []});
+    const rawAsks = Array.isArray(d.asks) ? d.asks.slice(0, 8).reverse() : [];
+    const rawBids = Array.isArray(d.bids) ? d.bids.slice(0, 8) : [];
+
+    const maxVol = Math.max(
+      ...rawAsks.map(a => a[1] || 0),
+      ...rawBids.map(b => b[1] || 0),
+      1
+    );
+
+    asksEl.innerHTML = rawAsks.map(([p, v]) => {
+      const pct = (v / maxVol * 100).toFixed(0);
+      return `<div class="ob-row ob-ask-row" style="--pct:${pct}%">
+        <span class="val-red">${fmtPrice(p)}</span>
+        <span class="ob-vol">${v.toFixed(4)}</span>
+      </div>`;
+    }).join('');
+
+    bidsEl.innerHTML = rawBids.map(([p, v]) => {
+      const pct = (v / maxVol * 100).toFixed(0);
+      return `<div class="ob-row ob-bid-row" style="--pct:${pct}%">
+        <span class="val-green">${fmtPrice(p)}</span>
+        <span class="ob-vol">${v.toFixed(4)}</span>
+      </div>`;
+    }).join('');
+
+    const mid = ((d.best_bid || 0) + (d.best_ask || 0)) / 2;
+    midEl.textContent = mid ? fmtPrice(mid) : '—';
+    midEl.className = 'ob-mid-price';
+  } catch(e) {}
+}
+
+// ── Close modal ───────────────────────────────────────────────────────────────
+function openCloseModal(symbol, side, amount, market_type) {
+  _pendingClose = {symbol, side, amount, market_type};
+  const sideLabel = side === 'long' ? 'LONG → SELL' : 'SHORT → BUY';
+  document.getElementById('close-info').innerHTML =
+    `<b>${symbol}</b> &nbsp;|&nbsp; ${sideLabel} &nbsp;|&nbsp; Объём: ${amount}`;
+  document.getElementById('modal-close').classList.remove('hidden');
+}
+
+async function confirmClose() {
+  if (!_pendingClose) return;
+  const btn = document.getElementById('close-confirm-btn');
+  btn.disabled = true;
+  btn.textContent = 'Закрываю...';
+  try {
+    const r = await fetch('/positions/api/close', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(_pendingClose),
+    });
+    if (!r.ok) { const e = await r.json(); throw new Error(e.detail); }
+    closeModal('modal-close');
+    await loadPositions();
+  } catch(e) {
+    alert('Ошибка: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Закрыть позицию';
+    _pendingClose = null;
+  }
+}
+
+// ── Order modal ───────────────────────────────────────────────────────────────
+let _ordSide = 'buy';
+
+function openOrderModal(symbol, market_type, currentPrice) {
+  document.getElementById('ord-symbol').value = symbol;
+  document.getElementById('ord-market').value = market_type;
+  document.getElementById('ord-price').value  = currentPrice || '';
+  document.getElementById('ord-amount').value = '';
+  document.getElementById('ord-result').className = 'ord-result hidden';
+  setSide('buy');
+  document.getElementById('modal-order').classList.remove('hidden');
+}
+
+function setSide(side) {
+  _ordSide = side;
+  document.getElementById('ord-side-buy').classList.toggle('active', side === 'buy');
+  document.getElementById('ord-side-sell').classList.toggle('active', side === 'sell');
+}
+
+async function submitOrder() {
+  const symbol      = document.getElementById('ord-symbol').value;
+  const market_type = document.getElementById('ord-market').value;
+  const price       = parseFloat(document.getElementById('ord-price').value);
+  const amount      = parseFloat(document.getElementById('ord-amount').value);
+  const res         = document.getElementById('ord-result');
+
+  if (!price || !amount) { showOrdResult('Укажите цену и количество', 'err'); return; }
+
+  showOrdResult('Размещаю ордер...', 'loading');
+
+  try {
+    const r = await fetch('/positions/api/order', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({symbol, side: _ordSide, amount, price, order_type: 'limit', market_type}),
+    });
+    if (!r.ok) { const e = await r.json(); throw new Error(e.detail); }
+    const d = await r.json();
+    showOrdResult(`✓ Ордер ${d.order.id} размещён | статус: ${d.order.status}`, 'ok');
+    setTimeout(() => { closeModal('modal-order'); loadOrders(); }, 2000);
+  } catch(e) {
+    showOrdResult('Ошибка: ' + e.message, 'err');
+  }
+}
+
+function showOrdResult(msg, type) {
+  const el = document.getElementById('ord-result');
+  el.textContent = msg;
+  el.className = `ord-result ${type}`;
+}
+
+// ── Modal helpers ─────────────────────────────────────────────────────────────
+function closeModal(id) {
+  document.getElementById(id).classList.add('hidden');
+}
+
+// Close modal on overlay click
+document.querySelectorAll('.modal-overlay').forEach(overlay => {
+  overlay.addEventListener('click', e => {
+    if (e.target === overlay) overlay.classList.add('hidden');
+  });
+});
+</script>
+{% endblock %}

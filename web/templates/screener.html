@@ -1,0 +1,219 @@
+{% extends "base.html" %}
+{% block title %}Скринер — AI Trading{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Скринер рынка</h1>
+  <span class="page-sub">Поиск торговых возможностей на Gate.io</span>
+</div>
+
+<div class="section">
+  <div class="filter-row">
+    <div class="filter-group">
+      <label>Рынок</label>
+      <select id="s-market" class="input-select">
+        <option value="spot">Spot</option>
+        <option value="futures">Futures</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <label>Показать топ</label>
+      <select id="s-top" class="input-select">
+        <option value="10">10</option>
+        <option value="20" selected>20</option>
+        <option value="30">30</option>
+        <option value="50">50</option>
+      </select>
+    </div>
+    <div class="filter-group" id="vol-group">
+      <label>Мин. объём (USDT)</label>
+      <input type="number" id="s-vol" class="input-field" value="500000" step="100000"/>
+    </div>
+  </div>
+
+  <!-- Расширенные фильтры -->
+  <div class="filter-row" style="margin-top:0.75rem">
+    <div class="filter-group">
+      <label>Ликвидность</label>
+      <select id="s-liquidity" class="input-select" onchange="onLiquidityChange()">
+        <option value="all">Все</option>
+        <option value="liquid">Ликвидные (объём &gt;2M$, спред &lt;0.3%)</option>
+        <option value="illiquid">Неликвиды (объём &lt;2M$)</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <label>ТА паттерн</label>
+      <select id="s-pattern" class="input-select" onchange="onPatternChange()">
+        <option value="">Без фильтра</option>
+        <option value="bullish">🟢 Любой бычий</option>
+        <option value="bearish">🔴 Любой медвежий</option>
+        <optgroup label="Конкретные паттерны">
+          <option value="hammer">Молот (Hammer)</option>
+          <option value="shooting_star">Падающая звезда</option>
+          <option value="doji">Доджи</option>
+          <option value="engulfing">Поглощение</option>
+          <option value="marubozu">Марубозу</option>
+          <option value="morning_star">Утренняя звезда</option>
+          <option value="evening_star">Вечерняя звезда</option>
+        </optgroup>
+      </select>
+    </div>
+    <div class="filter-group" id="tf-group" style="display:none">
+      <label>Таймфрейм (паттерны)</label>
+      <select id="s-tf" class="input-select">
+        <option value="15m">15m</option>
+        <option value="1h" selected>1h</option>
+        <option value="4h">4h</option>
+      </select>
+    </div>
+    <button class="btn btn-primary" onclick="runScreener()">▶ Запустить</button>
+  </div>
+
+  <div id="filter-note" class="filter-note hidden"></div>
+</div>
+
+<div id="screener-status" class="status-msg hidden"></div>
+
+<div class="section">
+  <div id="screener-table-wrap">
+    <div class="empty-state">Нажми «Запустить» для поиска торговых возможностей</div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function onLiquidityChange() {
+  const val = document.getElementById('s-liquidity').value;
+  const note = document.getElementById('filter-note');
+  const volGroup = document.getElementById('vol-group');
+
+  if (val === 'illiquid') {
+    // Скрываем поле мин. объёма — неликвиды ищем по объёму < 2M$ автоматически
+    volGroup.style.display = 'none';
+    note.textContent = 'Ищем монеты с суточным оборотом < 2 000 000$ (мёртвые монеты < 10K$ исключаются)';
+    note.className = 'filter-note info-note';
+  } else if (val === 'liquid') {
+    volGroup.style.display = '';
+    note.textContent = '⚠️ Фильтр ликвидных делает дополнительные запросы к стакану — займёт чуть больше времени';
+    note.className = 'filter-note warn-note';
+  } else {
+    volGroup.style.display = '';
+    note.className = 'filter-note hidden';
+  }
+}
+
+function onPatternChange() {
+  const val = document.getElementById('s-pattern').value;
+  const tfGroup = document.getElementById('tf-group');
+  const note = document.getElementById('filter-note');
+  if (val) {
+    tfGroup.style.display = '';
+    note.textContent = '⚠️ Фильтр паттернов загружает OHLCV для каждой монеты — может занять 30–60 секунд';
+    note.className = 'filter-note warn-note';
+  } else {
+    tfGroup.style.display = 'none';
+    if (document.getElementById('s-liquidity').value === 'all') {
+      note.className = 'filter-note hidden';
+    }
+  }
+}
+
+async function runScreener() {
+  const market    = document.getElementById('s-market').value;
+  const topN      = document.getElementById('s-top').value;
+  const minVol    = document.getElementById('s-vol').value;
+  const liquidity = document.getElementById('s-liquidity').value;
+  const pattern   = document.getElementById('s-pattern').value;
+  const timeframe = document.getElementById('s-tf').value;
+  const status    = document.getElementById('screener-status');
+  const wrap      = document.getElementById('screener-table-wrap');
+
+  let loadMsg = '⏳ Загружаю данные Gate.io...';
+  if (liquidity !== 'all') loadMsg += ' (проверяю спреды)';
+  if (pattern)            loadMsg += ' (сканирую паттерны)';
+
+  status.className = 'status-msg loading-msg';
+  status.textContent = loadMsg;
+  wrap.innerHTML = '';
+
+  try {
+    let url = `/api/market/screener?market=${market}&top_n=${topN}&min_volume=${minVol}`;
+    if (liquidity !== 'all') url += `&liquidity=${liquidity}`;
+    if (pattern)             url += `&pattern=${encodeURIComponent(pattern)}&timeframe=${timeframe}`;
+
+    const r = await fetch(url);
+    if (!r.ok) { const e = await r.json(); throw new Error(e.detail); }
+    const { data, count } = await r.json();
+
+    status.className = 'status-msg success-msg';
+    status.textContent = `✓ Найдено ${count} монет`;
+
+    if (!data.length) {
+      wrap.innerHTML = '<div class="empty-state">Монет не найдено по заданным критериям</div>';
+      return;
+    }
+
+    const hasPattern  = data.some(t => t.matched_pattern);
+    const hasSpread   = data.some(t => t.spread_pct !== undefined);
+
+    let headerExtra = '';
+    if (hasSpread)  headerExtra += '<th>Спред</th>';
+    if (hasPattern) headerExtra += '<th>Паттерн</th>';
+
+    let rows = '';
+    data.forEach((t, i) => {
+      const chg = t.change_24h_pct ?? 0;
+      const chgClass = chg >= 0 ? 'val-green' : 'val-red';
+      const chgStr = `${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%`;
+      const vol = t.quote_vol_24h ?? 0;
+      const volStr = vol >= 1e6 ? `${(vol/1e6).toFixed(1)}M$` : `${(vol/1e3).toFixed(0)}K$`;
+      const sym = encodeURIComponent(t.symbol);
+
+      let extraCells = '';
+      if (hasSpread) {
+        const sp = t.spread_pct !== undefined ? `${t.spread_pct.toFixed(3)}%` : '—';
+        const spClass = t.spread_pct <= 0.3 ? 'val-green' : t.spread_pct > 1.0 ? 'val-red' : '';
+        extraCells += `<td class="${spClass}">${sp}</td>`;
+      }
+      if (hasPattern) {
+        const pat = t.matched_pattern || '—';
+        const patClass = t.direction === 'bullish' ? 'pat-badge pat-bull' : t.direction === 'bearish' ? 'pat-badge pat-bear' : 'pat-badge';
+        extraCells += `<td>${pat !== '—' ? `<span class="${patClass}">${pat}</span>` : '—'}</td>`;
+      }
+
+      rows += `
+        <tr>
+          <td class="val-dim">${i+1}</td>
+          <td><a href="/analysis?symbol=${sym}&market=${market}" class="sym-link">${t.symbol}</a></td>
+          <td class="val-white">${fmtPrice(t.last)}</td>
+          <td class="${chgClass}">${chgStr}</td>
+          <td>${volStr}</td>
+          <td class="val-dim">${t.high_24h ? fmtPrice(t.high_24h) : '—'}</td>
+          <td class="val-dim">${t.low_24h ? fmtPrice(t.low_24h) : '—'}</td>
+          ${extraCells}
+          <td>
+            <a href="/analysis?symbol=${sym}&market=${market}" class="btn btn-xs">Анализ</a>
+          </td>
+        </tr>`;
+    });
+
+    wrap.innerHTML = `
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>#</th><th>Символ</th><th>Цена</th><th>Изм. 24ч</th>
+            <th>Объём 24ч</th><th>Max 24ч</th><th>Min 24ч</th>
+            ${headerExtra}<th></th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  } catch(e) {
+    status.className = 'status-msg error-msg';
+    status.textContent = `✗ Ошибка: ${e.message}`;
+    wrap.innerHTML = '';
+  }
+}
+</script>
+{% endblock %}

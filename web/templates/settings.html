@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+{% block title %}Настройки риска — AI Trading{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Настройки риска</h1>
+  <span class="page-sub">Параметры применяются мгновенно и сохраняются в .env</span>
+</div>
+
+<div class="two-col">
+
+  <!-- Форма настроек -->
+  <div class="section">
+    <div class="section-title">Параметры риск-менеджмента</div>
+    <div id="settings-msg" class="status-msg hidden"></div>
+
+    <div class="form-group">
+      <label class="form-label">Размер входа (USDT)</label>
+      <input type="number" id="s-entry" class="input-field" step="0.1" min="1"
+             value="{{ cfg.entry_size }}" placeholder="10"/>
+      <div class="form-hint">Размер одной позиции в долларах</div>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Макс. убыток за сделку (USDT)</label>
+      <input type="number" id="s-loss" class="input-field" step="0.1" min="0.1"
+             value="{{ cfg.max_loss_per_trade }}" placeholder="1.0"/>
+      <div class="form-hint">Размер стоп-лосса в долларах (обычно 10% от входа)</div>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Дневной лимит просадки (USDT)</label>
+      <input type="number" id="s-dd" class="input-field" step="0.5" min="1"
+             value="{{ cfg.daily_drawdown_limit }}" placeholder="6.0"/>
+      <div class="form-hint">При достижении лимита торговая сессия блокируется</div>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Минимальный R:R</label>
+      <input type="number" id="s-rr" class="input-field" step="0.5" min="1"
+             value="{{ cfg.min_rr_ratio }}" placeholder="3"/>
+      <div class="form-hint">Минимальное соотношение риск/доходность для входа</div>
+    </div>
+
+    <div style="display:flex; gap:1rem; margin-top:1rem">
+      <button class="btn btn-primary btn-lg" onclick="saveSettings()">💾 Сохранить</button>
+      <button class="btn btn-secondary" onclick="loadCurrent()">↻ Сбросить</button>
+    </div>
+  </div>
+
+  <!-- Превью расчёта -->
+  <div class="section">
+    <div class="section-title">Предпросмотр параметров</div>
+    <table class="info-table" id="preview-table">
+      <tr><td>Размер входа</td><td class="val-white" id="prev-entry">—</td></tr>
+      <tr><td>Стоп-лосс (SL)</td><td class="val-red" id="prev-sl">—</td></tr>
+      <tr><td>R:R минимум</td><td class="val-green" id="prev-rr">—</td></tr>
+      <tr><td>TP1 (3R)</td><td class="val-green" id="prev-tp1">—</td></tr>
+      <tr><td>TP2 (5R)</td><td class="val-green" id="prev-tp2">—</td></tr>
+      <tr><td>TP3 (8R)</td><td class="val-green" id="prev-tp3">—</td></tr>
+      <tr><td>Лимит просадки</td><td class="val-red" id="prev-dd">—</td></tr>
+      <tr><td>Макс. сделок в день</td><td class="val-white" id="prev-max">—</td></tr>
+    </table>
+
+    <div class="section-title" style="margin-top:1.5rem">Объяснение</div>
+    <div class="claude-output" style="font-size:0.8rem; line-height:1.6">
+      <b>Размер входа</b> — сколько USDT ты вкладываешь в одну сделку.<br>
+      <b>Стоп-лосс</b> — максимальная потеря на одну сделку (рекомендуется 10% от входа).<br>
+      <b>R:R (Risk:Reward)</b> — минимум, при котором агент одобряет вход. R:R=3 означает TP1 = вход × 3 SL.<br>
+      <b>Лимит просадки</b> — суммарный убыток за день, при котором торговля блокируется.<br>
+      <b>Макс. сделок</b> — лимит просадки ÷ SL = максимальное число потерь подряд.
+    </div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+window.addEventListener('DOMContentLoaded', updatePreview);
+
+['s-entry','s-loss','s-dd','s-rr'].forEach(id => {
+  document.getElementById(id).addEventListener('input', updatePreview);
+});
+
+function updatePreview() {
+  const entry = parseFloat(document.getElementById('s-entry').value) || 0;
+  const loss  = parseFloat(document.getElementById('s-loss').value)  || 0;
+  const dd    = parseFloat(document.getElementById('s-dd').value)    || 0;
+  const rr    = parseFloat(document.getElementById('s-rr').value)    || 0;
+
+  document.getElementById('prev-entry').textContent = entry ? `${entry.toFixed(2)}$` : '—';
+  document.getElementById('prev-sl').textContent    = loss  ? `−${loss.toFixed(2)}$` : '—';
+  document.getElementById('prev-rr').textContent    = rr    ? `${rr.toFixed(1)}:1`   : '—';
+  document.getElementById('prev-tp1').textContent   = loss  ? `+${(loss*3).toFixed(2)}$` : '—';
+  document.getElementById('prev-tp2').textContent   = loss  ? `+${(loss*5).toFixed(2)}$` : '—';
+  document.getElementById('prev-tp3').textContent   = loss  ? `+${(loss*8).toFixed(2)}$` : '—';
+  document.getElementById('prev-dd').textContent    = dd    ? `−${dd.toFixed(2)}$`   : '—';
+  document.getElementById('prev-max').textContent   = (dd && loss) ? Math.floor(dd/loss) : '—';
+}
+
+async function saveSettings() {
+  const entry = parseFloat(document.getElementById('s-entry').value);
+  const loss  = parseFloat(document.getElementById('s-loss').value);
+  const dd    = parseFloat(document.getElementById('s-dd').value);
+  const rr    = parseFloat(document.getElementById('s-rr').value);
+
+  if (!entry || !loss || !dd || !rr) {
+    showMsg('Заполни все поля', 'error-msg');
+    return;
+  }
+
+  showMsg('Сохраняю...', 'loading-msg');
+
+  try {
+    const r = await fetch('/settings/api/update', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        entry_size:           entry,
+        max_loss_per_trade:   loss,
+        daily_drawdown_limit: dd,
+        min_rr_ratio:         rr,
+      }),
+    });
+    if (!r.ok) { const e = await r.json(); throw new Error(e.detail); }
+    showMsg('✓ Настройки сохранены и применены', 'success-msg');
+    updatePreview();
+  } catch(e) {
+    showMsg('Ошибка: ' + e.message, 'error-msg');
+  }
+}
+
+async function loadCurrent() {
+  const r = await fetch('/settings/api/current');
+  if (!r.ok) return;
+  const d = await r.json();
+  document.getElementById('s-entry').value = d.entry_size;
+  document.getElementById('s-loss').value  = d.max_loss_per_trade;
+  document.getElementById('s-dd').value    = d.daily_drawdown_limit;
+  document.getElementById('s-rr').value    = d.min_rr_ratio;
+  updatePreview();
+  showMsg('Текущие настройки загружены', 'success-msg');
+}
+
+function showMsg(text, cls) {
+  const el = document.getElementById('settings-msg');
+  el.textContent = text;
+  el.className = 'status-msg ' + cls;
+}
+</script>
+{% endblock %}

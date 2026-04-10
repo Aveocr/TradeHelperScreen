@@ -1,0 +1,241 @@
+{% extends "base.html" %}
+{% block title %}Рекомендация — AI Trading{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Рекомендация агента</h1>
+  <span class="page-sub">Claude AI + ТА + Reddit сентимент</span>
+</div>
+
+<!-- Форма -->
+<div class="section">
+  <div class="filter-row">
+    <div class="filter-group">
+      <label>Символ</label>
+      <input type="text" id="r-symbol" class="input-field" value="{{ symbol }}" style="width:140px"/>
+    </div>
+    <div class="filter-group">
+      <label>Рынок</label>
+      <select id="r-market" class="input-select">
+        <option value="spot"    {% if market == 'spot'    %}selected{% endif %}>Spot</option>
+        <option value="futures" {% if market == 'futures' %}selected{% endif %}>Futures</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <label>Таймфрейм</label>
+      <select id="r-tf" class="input-select">
+        <option value="1m"  {% if timeframe == '1m'  %}selected{% endif %}>1m</option>
+        <option value="5m"  {% if timeframe == '5m'  %}selected{% endif %}>5m</option>
+        <option value="15m" {% if timeframe == '15m' %}selected{% endif %}>15m</option>
+        <option value="1h"  {% if timeframe == '1h'  %}selected{% endif %}>1h</option>
+        <option value="4h"  {% if timeframe == '4h'  %}selected{% endif %}>4h</option>
+      </select>
+    </div>
+    <button class="btn btn-primary btn-lg" id="run-btn" onclick="startRecommend()">
+      🤖 Получить рекомендацию
+    </button>
+  </div>
+</div>
+
+<div id="rec-status" class="status-msg hidden"></div>
+
+<!-- Блок данных -->
+<div id="rec-data" class="hidden">
+  <div class="cards-row" id="rec-cards"></div>
+
+  <div class="two-col">
+    <div class="section">
+      <div class="section-title">Технический сигнал</div>
+      <div id="rec-signal"></div>
+    </div>
+    <div class="section">
+      <div class="section-title">Сентимент Reddit</div>
+      <div id="rec-sentiment"></div>
+    </div>
+  </div>
+
+  <div class="two-col">
+    <div class="section">
+      <div class="section-title">Расчёт входа</div>
+      <table class="info-table" id="rec-risk"></table>
+    </div>
+    <div class="section">
+      <div class="section-title">Стакан</div>
+      <table class="info-table" id="rec-ob"></table>
+    </div>
+  </div>
+</div>
+
+<!-- Claude ответ -->
+<div class="section" id="claude-section" style="display:none">
+  <div class="section-title">
+    🤖 Анализ Claude
+    <span id="claude-status-dot" class="claude-dot blink"></span>
+  </div>
+  <div id="claude-output" class="claude-output"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let eventSource = null;
+
+function startRecommend() {
+  const sym = document.getElementById('r-symbol').value.trim().toUpperCase();
+  const mkt = document.getElementById('r-market').value;
+  const tf  = document.getElementById('r-tf').value;
+
+  // Сбрасываем UI
+  document.getElementById('rec-data').classList.add('hidden');
+  document.getElementById('claude-section').style.display = 'none';
+  document.getElementById('claude-output').textContent = '';
+
+  const status = document.getElementById('rec-status');
+  status.className = 'status-msg loading-msg';
+  status.textContent = '⏳ Запускаю анализ...';
+
+  document.getElementById('run-btn').disabled = true;
+
+  if (eventSource) eventSource.close();
+
+  const url = `/agent/stream?symbol=${encodeURIComponent(sym)}&market=${mkt}&timeframe=${tf}`;
+  eventSource = new EventSource(url);
+
+  eventSource.addEventListener('status', e => {
+    status.textContent = e.data;
+  });
+
+  eventSource.addEventListener('data', e => {
+    try {
+      const d = JSON.parse(e.data);
+      renderData(d);
+      document.getElementById('rec-data').classList.remove('hidden');
+    } catch(err) { console.error(err); }
+  });
+
+  eventSource.addEventListener('claude', e => {
+    const sec = document.getElementById('claude-section');
+    sec.style.display = 'block';
+    document.getElementById('claude-output').textContent += e.data;
+  });
+
+  eventSource.addEventListener('done', e => {
+    status.className = 'status-msg success-msg';
+    status.textContent = '✓ Анализ завершён';
+    document.getElementById('claude-status-dot').classList.remove('blink');
+    document.getElementById('run-btn').disabled = false;
+    eventSource.close();
+  });
+
+  eventSource.addEventListener('error', e => {
+    status.className = 'status-msg error-msg';
+    status.textContent = '✗ Ошибка: ' + (e.data || 'Нет соединения');
+    document.getElementById('run-btn').disabled = false;
+    eventSource.close();
+  });
+
+  eventSource.onerror = () => {
+    if (eventSource.readyState === EventSource.CLOSED) return;
+    status.className = 'status-msg error-msg';
+    status.textContent = '✗ Соединение прервано';
+    document.getElementById('run-btn').disabled = false;
+  };
+}
+
+function renderData(d) {
+  const t = d.ticker || {};
+  const s = d.signal  || {};
+  const r = d.risk    || {};
+  const sent = d.sentiment || {};
+  const ob = d.ob || {};
+
+  // Карточки
+  const chg = t.change_24h_pct ?? 0;
+  const ind = s.indicators || {};
+  document.getElementById('rec-cards').innerHTML = `
+    <div class="card ${chg >= 0 ? 'card-green' : 'card-red'}">
+      <div class="card-label">Цена</div>
+      <div class="card-value">${fmtPrice(t.last)}</div>
+      <div class="card-sub">${chg >= 0 ? '+' : ''}${chg.toFixed(2)}% за 24ч</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Объём 24ч</div>
+      <div class="card-value" style="font-size:1.3rem">${fmtVol(t.quote_vol_24h)}</div>
+      <div class="card-sub">котируемый</div>
+    </div>
+    <div class="card">
+      <div class="card-label">RSI</div>
+      <div class="card-value ${(ind.rsi??50) < 30 ? 'val-green' : (ind.rsi??50) > 70 ? 'val-red' : ''}"
+           style="font-size:1.5rem">${ind.rsi?.toFixed(1) ?? '—'}</div>
+      <div class="card-sub">${(ind.rsi??50) < 30 ? 'Перепродан' : (ind.rsi??50) > 70 ? 'Перекуплен' : 'Нейтрально'}</div>
+    </div>
+    <div class="card">
+      <div class="card-label">ATR %</div>
+      <div class="card-value" style="font-size:1.5rem">${ind.atr_pct?.toFixed(2) ?? '—'}%</div>
+      <div class="card-sub">волатильность</div>
+    </div>`;
+
+  // Сигнал
+  const dirMap = { long: ['val-green','▲ LONG'], short: ['val-red','▼ SHORT'], neutral: ['val-dim','◆ НЕЙТРАЛЬНО'] };
+  const confMap = { high: 'Высокая', medium: 'Средняя', low: 'Низкая' };
+  const [cls, lbl] = dirMap[s.direction] || ['val-dim','—'];
+  const reasons = (s.reasons || []).map(r => `<div class="reason-item">• ${r}</div>`).join('');
+  document.getElementById('rec-signal').innerHTML = `
+    <div class="signal-box">
+      <div style="font-size:1.6rem;font-weight:700" class="${cls}">${lbl}</div>
+      <div style="font-size:0.8rem;color:var(--text-dim);margin-top:0.4rem">
+        Скор: <b>${s.score > 0 ? '+' : ''}${s.score}</b> &nbsp;|&nbsp;
+        Уверенность: <b>${confMap[s.confidence] || s.confidence}</b>
+      </div>
+    </div>
+    <div style="margin-top:0.5rem">${reasons}</div>`;
+
+  // Сентимент
+  const sentCls = { bullish: 'val-green', bearish: 'val-red', neutral: 'val-yellow' };
+  const src = sent.sources?.reddit || {};
+  document.getElementById('rec-sentiment').innerHTML = sent.summary ? `
+    <div class="signal-box" style="margin-bottom:0.5rem">
+      <div style="font-size:1.2rem;font-weight:700" class="${sentCls[sent.label]||''}">
+        ${sent.label?.toUpperCase() || '—'}
+      </div>
+      <div style="font-size:0.8rem;color:var(--text-dim)">Скор: ${sent.score} | ${sent.confidence}</div>
+    </div>
+    <div style="font-size:0.8rem;color:var(--text-dim);margin-bottom:0.5rem">${sent.summary}</div>
+    ${src.top_titles?.length ? '<div style="font-size:0.75rem">' +
+      src.top_titles.map(t => `<div class="reason-item">• ${t}</div>`).join('') + '</div>' : ''}
+  ` : `<div class="val-dim">Данные сентимента недоступны</div>`;
+
+  // Риск
+  const riskEl = document.getElementById('rec-risk');
+  if (r.is_valid) {
+    riskEl.innerHTML = `
+      <tr><td>Направление</td><td class="${r.direction==='long'?'val-green':'val-red'}">${r.direction?.toUpperCase()}</td></tr>
+      <tr><td>Вход</td><td class="val-white">${fmtPrice(r.entry_price)}</td></tr>
+      <tr><td>SL</td><td class="val-red">${fmtPrice(r.sl_price)} (−${r.sl_pct}%)</td></tr>
+      <tr><td>TP1 (3:1)</td><td class="val-green">${fmtPrice(r.tp1_price)} (+${r.tp1_pct}%)</td></tr>
+      <tr><td>TP2 (5:1)</td><td class="val-green">${fmtPrice(r.tp2_price)}</td></tr>
+      <tr><td>TP3 (8:1)</td><td class="val-green">${fmtPrice(r.tp3_price)}</td></tr>
+      <tr><td>Размер входа</td><td>${r.entry_size}$</td></tr>
+      <tr><td>Макс. убыток</td><td class="val-red">−${r.max_loss}$</td></tr>`;
+  } else {
+    riskEl.innerHTML = `<tr><td colspan="2" class="val-red">${r.warning}</td></tr>`;
+  }
+
+  // Стакан
+  const obEl = document.getElementById('rec-ob');
+  if (ob && ob.best_bid) {
+    const liqCls = ob.is_liquid ? 'val-green' : 'val-red';
+    const pMap = { buy: 'val-green', sell: 'val-red', neutral: 'val-yellow' };
+    obEl.innerHTML = `
+      <tr><td>Ликвидность</td><td class="${liqCls}">${ob.is_liquid ? '✓ OK' : '✗ Неликвидно'}</td></tr>
+      <tr><td>Спред</td><td class="val-white">${ob.spread_pct}%</td></tr>
+      <tr><td>Best Bid</td><td class="val-green">${fmtPrice(ob.best_bid)}</td></tr>
+      <tr><td>Best Ask</td><td class="val-red">${fmtPrice(ob.best_ask)}</td></tr>
+      <tr><td>Давление</td><td class="${pMap[ob.pressure]||''}">${ob.pressure?.toUpperCase()}</td></tr>
+      <tr><td>Bid / Ask vol</td><td>${ob.bid_volume?.toFixed(1)} / ${ob.ask_volume?.toFixed(1)}</td></tr>`;
+  } else {
+    obEl.innerHTML = '<tr><td class="val-dim">Нет данных</td></tr>';
+  }
+}
+</script>
+{% endblock %}
